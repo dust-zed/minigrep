@@ -3,10 +3,10 @@ use anstyle::{Color, RgbColor, Style};
 use clap::Parser;
 use command::Args;
 use ignore::{
-    types::{self, TypesBuilder},
-    Walk, WalkBuilder,
+    types::{TypesBuilder}, WalkBuilder,
 };
 use regex::Regex;
+use tokio::time::Instant;
 use std::io::Result as IoResult;
 use std::{
     error::Error,
@@ -17,7 +17,10 @@ use std::{
 mod command;
 fn main() {
     let args = Args::parse();
+    let now = Instant::now();
     run(args);
+    let elapsed = now.elapsed();
+    println!("查找总共耗时: {}ms", elapsed.as_millis());
 }
 
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
@@ -36,8 +39,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         types_builder.select("all");
     };
     let types = types_builder.build().unwrap();
-    //内容支持正则匹配
-    let regex = Regex::new(&content).expect("build regex error");
     let walk = WalkBuilder::new(path).types(types).build();
     for results in walk {
         match results {
@@ -47,7 +48,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     continue;
                 } else if metadata.is_file() {
                     println!("{}", entry.path().display());
-                    search_content(&regex, entry.path()).unwrap();
+                    if let Some(ref content) = content {
+                        let regex = Regex::new(content).expect("build regex error");
+                        search_content(&regex, entry.path()).unwrap();
+                    }
                 } else {
                     continue;
                 }

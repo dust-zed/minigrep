@@ -10,8 +10,8 @@ pub struct Args {
     #[clap(short, long)]
     pub name: Option<String>,
     ///content
-    #[clap(short, long, default_value = "")]
-    pub content: String,
+    #[clap(short, long)]
+    pub content: Option<String>,
     ///max-depth
     #[clap(long)]
     pub max_depth: Option<u32>,
