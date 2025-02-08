@@ -17,7 +17,7 @@ pub struct Args {
     pub max_depth: Option<u32>,
     ///threads
     #[clap(long)]
-    pub threads: Option<u8>,
+    pub threads: Option<usize>,
     ///ignore case
     #[clap(long)]
     pub ignore_case: Option<bool>
