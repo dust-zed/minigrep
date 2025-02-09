@@ -2,18 +2,19 @@ use anstream::println;
 use anstyle::{Color, RgbColor};
 use clap::Parser;
 use command::Args;
-use ignore::DirEntry;
 use ignore::{types::TypesBuilder, WalkBuilder};
-use regex::{bytes, Regex, RegexBuilder};
+use lazy_static::lazy_static;
+use regex::{Regex, RegexBuilder};
 use std::io::Read;
 use std::sync::Arc;
-use std::thread;
 use std::{error::Error, path::Path};
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::sync::Semaphore;
 use tokio::time::Instant;
 mod command;
+
+lazy_static! {
+    static ref GREEN: anstyle::Style = anstyle::Style::new().fg_color(Some(Color::Rgb(RgbColor(0, 255, 0))));
+    static ref BLUE: anstyle::Style = anstyle::Style::new().fg_color(Some(Color::Rgb(RgbColor(0, 0, 255))));
+}
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
@@ -56,7 +57,7 @@ async fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 match result {
                     Ok(entry) => {
                         if let Some(ref regex) = regex_opt {
-                            search_content_from_file(&regex, entry.path());
+                            let _ = search_content_from_file(&regex, entry.path());
                         }
                         Continue
                     }
@@ -68,7 +69,13 @@ async fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let walker = WalkBuilder::new(path).types(types).build();
         for result in walker {
             match result {
-                Ok(entry) => {}
+                Ok(entry) => {
+                    let regex_opt = content.as_ref().map(|c| Arc::new(build_regex(c).unwrap()));
+                    if let Some(ref regex) = regex_opt {
+                        let _ = search_content_from_file(&regex, entry.path());
+                    }
+
+                }
                 Err(_) => {}
             }
         }
@@ -85,12 +92,10 @@ fn search_content_from_file(pattern: &Regex, path: &Path) -> Result<(), Box<dyn 
     let cap = file.metadata().map(|m| m.len() as usize + 1).unwrap_or(0);
     let mut rdr = std::io::BufReader::new(file);
     let mut buf = String::with_capacity(cap);
-    let green = anstyle::Style::new().fg_color(Some(Color::Rgb(RgbColor(0, 255, 0))));
-    let blue = anstyle::Style::new().fg_color(Some(Color::Rgb(RgbColor(0, 0, 255))));
     rdr.read_to_string(&mut buf)?;
     for (line_num, line) in buf.lines().enumerate() {
         if pattern.is_match(&line.trim_end()) {
-            println!("{}{}\t{}{}", green, line_num, blue, line);
+            println!("{}{}\t{}{}", *GREEN, line_num + 1, *BLUE, line);
         }
     }
     Ok(())
