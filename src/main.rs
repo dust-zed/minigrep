@@ -1,16 +1,17 @@
 use anstream::println;
-use anstyle::{Color, RgbColor, Style};
-use clap::error::ErrorKind;
+use anstyle::{Color, RgbColor};
 use clap::Parser;
 use command::Args;
+use ignore::DirEntry;
 use ignore::{types::TypesBuilder, WalkBuilder};
-use regex::Regex;
-use tokio::{join, task};
-use std::sync::mpsc::channel;
+use regex::{bytes, Regex, RegexBuilder};
+use std::io::Read;
+use std::sync::Arc;
 use std::thread;
 use std::{error::Error, path::Path};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::sync::Semaphore;
 use tokio::time::Instant;
 mod command;
 #[tokio::main]
@@ -40,23 +41,26 @@ async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     };
     let types = types_builder.build().unwrap();
     //是否并行匹配
-    let threads = threads.map_or(0, |threads| threads);
-    let parallel = if threads > 1 { true } else { false };
-    let (tx, rx) = channel();
-
+    let thread_count = threads.map_or(0, |threads| threads);
+    let parallel = if thread_count > 1 { true } else { false };
     if parallel {
-        let walker = WalkBuilder::new(path).types(types).threads(threads).build_parallel();
+        let walker = WalkBuilder::new(path)
+            .types(types)
+            .threads(thread_count)
+            .build_parallel();
         walker.run(|| {
-            let tx = tx.clone();
-            Box::new(move |result | {
+            let regex_opt = content.as_ref().map(|c| Arc::new(build_regex(c).unwrap()));
+            Box::new(move |result| {
                 use ignore::WalkState::*;
-                //println!("thread id : {:?}", thread::current().id());
+                //println!("{} thread id : {:?}",tx.capacity(), thread::current().id());
                 match result {
                     Ok(entry) => {
-                        tx.send(entry).unwrap();
+                        if let Some(ref regex) = regex_opt {
+                            search_content_from_file(&regex, entry.path());
+                        }
                         Continue
                     }
-                    Err(_) => Skip
+                    Err(_) => Skip,
                 }
             })
         });
@@ -64,63 +68,29 @@ async fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let walker = WalkBuilder::new(path).types(types).build();
         for result in walker {
             match result {
-                Ok(entry) => {
-                    tx.send(entry).unwrap();
-                }
+                Ok(entry) => {}
                 Err(_) => {}
             }
-        }
-    }
-    drop(tx);
-    let walks = thread::spawn(move || {
-        let mut vec = Vec::new();
-        loop {
-            match rx.recv() {
-                Ok(entry) => {
-                    vec.push(entry);
-                }
-                Err(_) => break,
-            }
-        }
-        vec
-    });
-    let entries = walks.join().unwrap();
-    for entry in entries {
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            continue;
-        } else if metadata.is_file() {
-            if let Some(ref content) = content {
-                let regex = Regex::new(content).expect("build regex error");
-                search_content(&regex, entry.path()).await?;
-            }
-        } else {
-            continue;
         }
     }
     Ok(())
 }
 
-async fn search_content(pattern: &Regex, path: &Path) -> Result<(), Box<dyn Error>> {
-    let file = File::open(path).await?;
-    let mut read = BufReader::new(file);
-    let mut buffer = String::new();
+fn build_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    RegexBuilder::new(pattern).build()
+}
+
+fn search_content_from_file(pattern: &Regex, path: &Path) -> Result<(), Box<dyn Error>> {
+    let file = std::fs::File::open(path)?;
+    let cap = file.metadata().map(|m| m.len() as usize + 1).unwrap_or(0);
+    let mut rdr = std::io::BufReader::new(file);
+    let mut buf = String::with_capacity(cap);
     let green = anstyle::Style::new().fg_color(Some(Color::Rgb(RgbColor(0, 255, 0))));
     let blue = anstyle::Style::new().fg_color(Some(Color::Rgb(RgbColor(0, 0, 255))));
-    //行号
-    let mut line_num = 0;
-    loop {
-        buffer.clear();
-        line_num += 1;
-        match read.read_line(&mut buffer).await {
-            Ok(0) => break,
-            Ok(n) => {
-                if pattern.is_match(&buffer.trim_end()) {
-                    println!("{}{}\t{}{}", green, line_num, blue, buffer);
-                }
-                buffer.clear();
-            }
-            Err(e) => return Err(Box::new(e)),
+    rdr.read_to_string(&mut buf)?;
+    for (line_num, line) in buf.lines().enumerate() {
+        if pattern.is_match(&line.trim_end()) {
+            println!("{}{}\t{}{}", green, line_num, blue, line);
         }
     }
     Ok(())
